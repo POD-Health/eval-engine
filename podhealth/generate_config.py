@@ -44,7 +44,7 @@ YAML_HEADER = """\
 description: PodHealth AI Agent Evaluation
 
 providers:
-  - id: 'python:provider.py'
+  - id: 'file://provider.js'
     label: 'Piper AI Agent'
 
 prompts:
