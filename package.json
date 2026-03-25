@@ -36,6 +36,7 @@
     "pf": "dist/src/entrypoint.js"
   },
   "scripts": {
+    "podhealth:generate": "node podhealth/generate_config.js",
     "podhealth:eval": "node podhealth/generate_config.js && tsx src/main.ts eval -c podhealth/promptfooconfig.yaml --env-file podhealth/.env --no-cache",
     "audit:fix": "npm audit fix && npm audit fix --prefix src/app && npm audit fix --prefix site",
     "bin": "dist/src/entrypoint.js",
