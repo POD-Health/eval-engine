@@ -22,7 +22,8 @@ try {
   await import('xlsx');
 } catch {
   console.log('Installing xlsx package...');
-  execFileSync('npm', ['install', 'xlsx', '--no-save'], { stdio: 'inherit' });
+  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  execFileSync(npm, ['install', 'xlsx', '--no-save'], { stdio: 'inherit' });
 }
 
 const { default: XLSX } = await import('xlsx');
