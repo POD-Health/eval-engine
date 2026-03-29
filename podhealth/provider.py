@@ -87,7 +87,7 @@ def _parse_sse(response):
                 data = line[6:]
                 try:
                     parsed = json.loads(data)
-                    # Try common SSE payload shapes
+
                     if 'content' in parsed:
                         full_text += parsed['content']
                     elif 'text' in parsed:
@@ -100,9 +100,7 @@ def _parse_sse(response):
                             full_text += delta
                     elif 'message' in parsed:
                         full_text += parsed['message']
-                    # If none of the above matched, skip (metadata chunks)
                 except json.JSONDecodeError:
-                    # Raw text data line
                     full_text += data
 
     return full_text.strip()
@@ -148,6 +146,7 @@ def call_api(prompt, options, context):
         }
 
         logger.info(f"Sending question to Piper: {prompt[:80]}...")
+        logger.info("Calling Piper API now...")
 
         response = requests.post(
             url,
@@ -157,14 +156,25 @@ def call_api(prompt, options, context):
             timeout=120
         )
 
+        logger.info(f"Response status: {response.status_code}")
+
         if response.status_code == 401:
-            # Token may have expired — clear cache and retry once
             logger.warning("401 received, clearing token cache and retrying...")
             _token_cache['token'] = None
             _token_cache['expires_at'] = 0
+
             token = _get_token()
             headers["Authorization"] = f"Bearer {token}"
-            response = requests.post(url, json=payload, headers=headers, stream=True, timeout=120)
+
+            response = requests.post(
+                url,
+                json=payload,
+                headers=headers,
+                stream=True,
+                timeout=30
+            )
+
+            logger.info(f"Retry response status: {response.status_code}")
 
         if response.status_code != 200:
             return {"error": f"API error {response.status_code}: {response.text[:300]}"}
@@ -180,6 +190,6 @@ def call_api(prompt, options, context):
     except ClientError as e:
         return {"error": f"Cognito auth failed: {e}"}
     except requests.exceptions.Timeout:
-        return {"error": "Request timed out after 120 seconds"}
+        return {"error": "Request timed out after 30 seconds"}
     except Exception as e:
         return {"error": f"Provider error: {type(e).__name__}: {e}"}

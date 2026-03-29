@@ -150,7 +150,7 @@ function generateYaml(questions) {
 description: PodHealth AI Agent Evaluation
 
 providers:
-  - id: 'file://podhealth/provider.js'
+  - id: 'file://provider.py'
     label: 'Piper AI Agent'
 
 prompts:
