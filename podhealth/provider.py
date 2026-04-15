@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 import boto3
 from botocore.exceptions import ClientError
 
-# Load .env from the same directory as this script
+
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
