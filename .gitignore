@@ -2,6 +2,9 @@
 .env
 .local
 
+# PodHealth — generated files (may contain secrets)
+podhealth/promptfooconfig.yaml
+
 # Temporary and generated files
 scratch
 .worktrees/
