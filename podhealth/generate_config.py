@@ -13,7 +13,6 @@ or passed as a command-line argument:
 
 import os
 import sys
-import textwrap
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -64,7 +63,7 @@ tests:
 """
 
 YAML_TEST_ENTRY = """\
-  - description: '{question_id} {short_desc}'
+  - description: '{question_id} [{sheet_name}] {short_desc}'
     vars:
       question: {question}
       rubric: |
@@ -79,66 +78,69 @@ YAML_TEST_ENTRY = """\
 # ── Excel reader ──────────────────────────────────────────────────────────────
 
 def load_questions(excel_path: str) -> list[dict]:
-    """
-    Read the 'Test Cases' sheet from the Excel file.
-    Returns a list of dicts with keys: question_id, question, rubric
-    """
     wb = openpyxl.load_workbook(excel_path)
 
-    if 'Test Cases' not in wb.sheetnames:
-        print(f"ERROR: Sheet 'Test Cases' not found in {excel_path}")
+    excluded_sheets = ["Score Summary", "Instructions", "Version Log"]
+    target_sheets = [sheet for sheet in wb.sheetnames if sheet not in excluded_sheets]
+
+    if not target_sheets:
+        print(f"ERROR: No valid question sheets found in {excel_path}")
         print(f"Available sheets: {wb.sheetnames}")
         sys.exit(1)
 
-    ws = wb['Test Cases']
     questions = []
 
-    # Find header row (row with 'Question ID')
-    header_row = None
-    for row in ws.iter_rows():
-        for cell in row:
-            if cell.value and str(cell.value).strip() == 'Question ID':
-                header_row = cell.row
+    for sheet_name in target_sheets:
+        ws = wb[sheet_name]
+
+        header_row = None
+        header_row_idx = None
+
+        # find header row dynamically
+        for row_idx, row in enumerate(ws.iter_rows(values_only=True), start=1):
+            row_values = [str(cell).strip() if cell is not None else "" for cell in row]
+            if "Question ID" in row_values and "Test Question" in row_values:
+                header_row = row_values
+                header_row_idx = row_idx
                 break
-        if header_row:
-            break
 
-    if not header_row:
-        print("ERROR: Could not find header row with 'Question ID' column")
-        sys.exit(1)
-
-    # Map column names to indices
-    headers = {}
-    for cell in ws[header_row]:
-        if cell.value:
-            headers[str(cell.value).strip()] = cell.column
-
-    required = ['Question ID', 'Test Question', 'Expected Answer (Key Points)']
-    for col in required:
-        if col not in headers:
-            print(f"ERROR: Required column '{col}' not found in Excel")
-            print(f"Found columns: {list(headers.keys())}")
-            sys.exit(1)
-
-    qid_col = headers['Question ID']
-    question_col = headers['Test Question']
-    rubric_col = headers['Expected Answer (Key Points)']
-
-    # Read data rows
-    for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
-        qid = row[qid_col - 1]
-        question = row[question_col - 1]
-        rubric = row[rubric_col - 1]
-
-        # Skip empty rows
-        if not qid or not question:
+        if not header_row or not header_row_idx:
+            print(f"Skipping sheet without required headers: {sheet_name}")
             continue
 
-        questions.append({
-            'question_id': str(qid).strip(),
-            'question': str(question).strip().replace('\n', ' '),
-            'rubric': str(rubric).strip() if rubric else '',
-        })
+        try:
+            qid_col = header_row.index("Question ID")
+            question_col = header_row.index("Test Question")
+            expected_answer_col = header_row.index("Expected Answer (Key Points)")
+            qtype_col = header_row.index("Qualitative/Quantitative") if "Qualitative/Quantitative" in header_row else None
+        except ValueError:
+            print(f"Skipping sheet with missing required columns: {sheet_name}")
+            continue
+
+        for row in ws.iter_rows(min_row=header_row_idx + 1, values_only=True):
+            if not row:
+                continue
+
+            question_id = row[qid_col] if qid_col < len(row) else None
+            test_question = row[question_col] if question_col < len(row) else None
+            expected_answer = row[expected_answer_col] if expected_answer_col < len(row) else ""
+            qtype = row[qtype_col] if qtype_col is not None and qtype_col < len(row) else ""
+
+            if not question_id or not test_question:
+                continue
+
+            questions.append({
+                "question_id": str(question_id).strip(),
+                "question": str(test_question).strip(),
+                "expected_answer": str(expected_answer).strip() if expected_answer else "",
+                "type": str(qtype).strip() if qtype else "",
+                "sheet_name": sheet_name,
+            })
+
+    if not questions:
+        print(f"ERROR: No questions found in usable sheets in {excel_path}")
+        print(f"Checked sheets: {target_sheets}")
+        sys.exit(1)
 
     return questions
 
@@ -147,7 +149,7 @@ def load_questions(excel_path: str) -> list[dict]:
 
 def escape_yaml_string(s: str) -> str:
     """Wrap string in single quotes, escaping any single quotes inside."""
-    return "'" + s.replace("'", "''") + "'"
+    return "'" + str(s).replace("'", "''") + "'"
 
 
 def format_rubric(rubric: str) -> str:
@@ -155,9 +157,8 @@ def format_rubric(rubric: str) -> str:
     Format rubric as indented block scalar lines (8 spaces indent).
     Each bullet point on its own line.
     """
-    # Normalise bullet separators
     lines = []
-    for part in rubric.replace('\r\n', '\n').split('\n'):
+    for part in str(rubric).replace('\r\n', '\n').split('\n'):
         part = part.strip().lstrip('-').strip()
         if part:
             lines.append(f'        - {part}')
@@ -167,7 +168,7 @@ def format_rubric(rubric: str) -> str:
 
 def short_description(question: str, max_len: int = 40) -> str:
     """Generate a short description from the question text."""
-    q = question.replace('\n', ' ').replace("'", '').strip()
+    q = str(question).replace('\n', ' ').replace("'", '').strip()
     if len(q) > max_len:
         q = q[:max_len].rsplit(' ', 1)[0] + '...'
     return q
@@ -179,9 +180,10 @@ def generate_yaml(questions: list[dict]) -> str:
     for q in questions:
         entry = YAML_TEST_ENTRY.format(
             question_id=q['question_id'],
+            sheet_name=q['sheet_name'],
             short_desc=short_description(q['question']),
             question=escape_yaml_string(q['question']),
-            rubric=format_rubric(q['rubric']),
+            rubric=format_rubric(q['expected_answer']),
         )
         yaml_parts.append(entry)
 
@@ -212,7 +214,7 @@ def main():
 
     yaml_content = generate_yaml(questions)
 
-    with open(OUTPUT_YAML, 'w') as f:
+    with open(OUTPUT_YAML, 'w', encoding='utf-8') as f:
         f.write(yaml_content)
 
     print(f"Generated: {OUTPUT_YAML}")
