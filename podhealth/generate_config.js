@@ -34,21 +34,25 @@ function loadEnv(envPath) {
   if (!fs.existsSync(envPath)) {
     return;
   }
+
   const lines = fs.readFileSync(envPath, 'utf8').split('\n');
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) {
       continue;
     }
+
     const idx = trimmed.indexOf('=');
     if (idx === -1) {
       continue;
     }
+
     const key = trimmed.slice(0, idx).trim();
     const val = trimmed
       .slice(idx + 1)
       .trim()
       .replace(/^["']|["']$/g, '');
+
     if (!process.env[key]) {
       process.env[key] = val;
     }
@@ -66,45 +70,63 @@ const OUTPUT_YAML = path.join(__dirname, 'promptfooconfig.yaml');
 function loadQuestions(excelPath) {
   const wb = XLSX.readFile(excelPath);
 
-  if (!wb.SheetNames.includes('Test Cases')) {
-    console.error(`ERROR: Sheet 'Test Cases' not found in ${excelPath}`);
+  const excludedSheets = ['Score Summary', 'Instructions', 'Version Log'];
+  const targetSheets = wb.SheetNames.filter((name) => !excludedSheets.includes(name));
+
+  if (!targetSheets.length) {
+    console.error(`ERROR: No valid question sheets found in ${excelPath}`);
     console.error(`Available sheets: ${wb.SheetNames.join(', ')}`);
     process.exit(1);
   }
 
-  const ws = wb.Sheets['Test Cases'];
-
-  // The sheet has a title row first, then headers on row 2 — skip to row 3 for data
-  // Use raw array mode and find the header row manually
-  const rawRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-
-  // Find the row index that contains 'Question ID'
-  const headerRowIdx = rawRows.findIndex((row) => row.includes('Question ID'));
-  if (headerRowIdx === -1) {
-    console.error("ERROR: Could not find header row with 'Question ID' column");
-    process.exit(1);
-  }
-
-  const headers = rawRows[headerRowIdx];
-  const qidCol = headers.indexOf('Question ID');
-  const questionCol = headers.indexOf('Test Question');
-  const rubricCol = headers.indexOf('Expected Answer (Key Points)');
-
   const questions = [];
 
-  for (let i = headerRowIdx + 1; i < rawRows.length; i++) {
-    const row = rawRows[i];
-    const qid = String(row[qidCol] ?? '').trim();
-    const question = String(row[questionCol] ?? '')
-      .trim()
-      .replace(/\s+/g, ' ');
-    const rubric = String(row[rubricCol] ?? '').trim();
+  for (const sheetName of targetSheets) {
+    const ws = wb.Sheets[sheetName];
+    const rawRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
 
-    if (!qid || !question) {
+    const headerRowIdx = rawRows.findIndex((row) => row.includes('Question ID'));
+    if (headerRowIdx === -1) {
+      console.log(`Skipping sheet without Question ID header: ${sheetName}`);
       continue;
     }
 
-    questions.push({ qid, question, rubric });
+    const headers = rawRows[headerRowIdx];
+    const qidCol = headers.indexOf('Question ID');
+    const questionCol = headers.indexOf('Test Question');
+    const rubricCol = headers.indexOf('Expected Answer (Key Points)');
+
+    if (qidCol === -1 || questionCol === -1 || rubricCol === -1) {
+      console.log(`Skipping sheet with missing required columns: ${sheetName}`);
+      continue;
+    }
+
+    for (let i = headerRowIdx + 1; i < rawRows.length; i++) {
+      const row = rawRows[i];
+
+      const qid = String(row[qidCol] ?? '').trim();
+      const question = String(row[questionCol] ?? '')
+        .trim()
+        .replace(/\s+/g, ' ');
+      const rubric = String(row[rubricCol] ?? '').trim();
+
+      if (!qid || !question) {
+        continue;
+      }
+
+      questions.push({
+        qid,
+        question,
+        rubric,
+        sheetName,
+      });
+    }
+  }
+
+  if (!questions.length) {
+    console.error(`ERROR: No questions found in usable sheets in ${excelPath}`);
+    console.error(`Checked sheets: ${targetSheets.join(', ')}`);
+    process.exit(1);
   }
 
   return questions;
@@ -113,16 +135,16 @@ function loadQuestions(excelPath) {
 // ── YAML generator ────────────────────────────────────────────────────────────
 
 function escapeYaml(str) {
-  return "'" + str.replace(/'/g, "''") + "'";
+  return "'" + String(str).replace(/'/g, "''") + "'";
 }
 
 function shortDesc(question, maxLen = 40) {
-  const q = question.replace(/'/g, '').replace(/\s+/g, ' ').trim();
+  const q = String(question).replace(/'/g, '').replace(/\s+/g, ' ').trim();
   return q.length > maxLen ? q.slice(0, maxLen).replace(/\s\S*$/, '') + '...' : q;
 }
 
 function formatRubric(rubric) {
-  const lines = rubric
+  const lines = String(rubric)
     .replace(/\r\n/g, '\n')
     .split('\n')
     .map((l) => l.trim().replace(/^[-•]\s*/, ''))
@@ -131,6 +153,7 @@ function formatRubric(rubric) {
   if (!lines.length) {
     return '        - (no rubric provided)';
   }
+
   return lines.map((l) => `        - ${l}`).join('\n');
 }
 
@@ -171,8 +194,8 @@ tests:
 
   const tests = questions
     .map(
-      ({ qid, question, rubric }) => `\
-  - description: ${escapeYaml(`${qid} ${shortDesc(question)}`)}
+      ({ qid, question, rubric, sheetName }) => `\
+  - description: ${escapeYaml(`${qid} [${sheetName}] ${shortDesc(question)}`)}
     vars:
       question: ${escapeYaml(question)}
       rubric: |
